@@ -10,7 +10,7 @@ It addresses performance issues and driver quirks by bypasssing the generic Vulk
 -   🛠️ **Dockerized Build**: No need to install OneAPI on your host system.
 
 ## Performance
-Tested on **Dual Intel Arc B580**:
+Tested on **Dual Intel Arc B50**:
 -   **Baseline (Vulkan):** ~9 tokens/sec
 -   **This Backend (SYCL/XMX):** ~18-20 tokens/sec (**2x Speedup**)
 
