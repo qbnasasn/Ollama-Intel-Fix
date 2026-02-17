@@ -1,4 +1,4 @@
-# Ollama-Intel-Fix for Arc Battlemage (Dual B580 / Xe2)
+# Ollama-Intel-Fix for Arc Battlemage (Dual B580, B50, B60 / Xe2)
 
 This repository contains the **custom backend and proxy** required to run Ollama with hardware acceleration on Intel Arc Battlemage (Xe2) GPUs.
 
