@@ -1,45 +1,85 @@
-# Ollama Intel Arc (Battlemage) Fix
+# Ollama-Intel-Fix for Arc Battlemage (Dual B580 / Xe2)
 
-This repository provides a **custom native SYCL backend** for [Ollama](https://ollama.com/) (via `llama.cpp`) optimized for **Intel Arc B-Series (Battlemage)** GPUs.
+This repository contains the **custom backend and proxy** required to run Ollama with hardware acceleration on Intel Arc Battlemage (Xe2) GPUs.
 
-It addresses performance issues and driver quirks by bypasssing the generic Vulkan path and using **Intel OneAPI** directly with custom XMX kernels.
+Standard Ollama builds do not yet support the Xe2 architecture or multi-GPU splitting correctly. This solution provides:
 
-## Features
--   🚀 **Intel XMX Acceleration**: Uses `intel::joint_matrix` for high-performance tensor operations (F16).
--   ⚡ **Low Latency**: Implements `immediate_command_list` queues to reduce submission overhead.
--   🛠️ **Dockerized Build**: No need to install OneAPI on your host system.
-
-## Performance
-Tested on **Dual Intel Arc B50**:
--   **Baseline (Vulkan):** ~9 tokens/sec
--   **This Backend (SYCL/XMX):** ~18-20 tokens/sec (**2x Speedup**)
+1.  **Custom Compilation**: A `llama-server` binary built from source with Intel OneAPI 2025.3 and XMX optimization patches.
+2.  **Ollama Proxy**: A smart Python wrapper that handles model loading, environment variables (`setvars.sh`), and memory safety.
+3.  **Auto-Split (Multi-GPU)**: Automatically shards large models (>11GB) across dual GPUs while keeping small models fast on a single card.
 
 ## Prerequisites
--   Linux with Intel GPU Drivers installed.
--   Docker.
 
-## Quick Start
+*   **Hardware**: Intel Arc Battlemage (B580/B570) - Single or Dual.
+*   **Drivers**: Intel Compute Runtime (Level Zero) installed on host.
+*   **Docker**: With `/dev/dri` access.
 
-### 1. Build the Custom Backend
-Run the included build script. It will create a Docker image with the OneAPI compilers and build `llama-server`.
+## Quick Start (Pre-Built Image)
 
-```bash
-./build.sh
-```
-
-### 2. Run the Optimized Server
-Use the provided `run_ollama_xmx.sh` (or `docker run` command) to launch the backend.
+If you have built the image `ollama-custom-xmx:latest` (instructions below), run:
 
 ```bash
-# Example: Launch with a GGUF model mapped
-docker run -d --name ollama-xmx \
-  --device /dev/dri:/dev/dri \
-  -v ./llama.cpp-source/build/bin:/app \
-  -v /path/to/your/models:/models \
-  -p 8081:8080 \
-  llama-oneapi \
-  /app/llama-server -m /models/phi4.gguf -c 8192 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
+docker run -d \
+  --restart always \
+  -p 11434:8080 \
+  -v ollama_data:/ollama_data \
+  --device /dev/dri \
+  --name ollama-custom-xmx \
+  ollama-custom-xmx
 ```
 
-## Legacy Fixes
-If you prefer to stick with the default Vulkan backend but are experiencing hangs with DeepSeek models, check `scripts/legacy/fix_deepseek.sh`.
+Then connect via any Ollama client (OpenWebUI, Curl, etc) at `http://localhost:11434`.
+
+## Features
+
+### 1. Smart Auto-Split (Dual GPU Support)
+The Proxy checks the model size before loading:
+*   **< 11GB (e.g., Llama3-8B, Phi-4)**: Runs on **Single GPU**. Fastest inference, zero overhead.
+*   **> 11GB (e.g., Qwen-14B, Command-R)**: Automatically enables `--split-mode layer`. Uses both B580s as a single 24GB VRAM pool.
+
+**Manual Override**: Force split mode for small models by adding `-e SPLIT_MODE=true` to the `docker run` command.
+
+### 2. Memory Safety
+*   **Context Limit**: Default context is capped at **2048 tokens** to prevent OOM crashes on 12GB cards with larger models.
+*   **Environment Injection**: Automatically sources Intel OneAPI environment variables which are often missing in standard containers.
+
+## Build From Source
+
+To build the `ollama-custom-xmx` image yourself:
+
+1.  **Clone this repo**:
+    ```bash
+    git clone https://github.com/qbnasasn/Ollama-Intel-Fix
+    cd Ollama-Intel-Fix
+    ```
+
+2.  **Build the Builder Image**:
+    ```bash
+    docker build -t llama-oneapi -f docker/Dockerfile.builder docker/
+    ```
+
+3.  **Compile the Backend**:
+    *Requires `llama.cpp` source code mounted to `/llama-source`.*
+    ```bash
+    git clone https://github.com/ggml-org/llama.cpp llama.cpp-source
+    
+    docker run --rm -v $(pwd)/llama.cpp-source:/llama-source -w /llama-source llama-oneapi bash -c \
+      "source /opt/intel/oneapi/setvars.sh --force ; \
+       rm -rf build && \
+       cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL \
+       -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+       -DBUILD_SHARED_LIBS=OFF -DGGML_STATIC=ON -DCMAKE_EXE_LINKER_FLAGS='-static-intel' && \
+       cmake --build build --config Release -j \$(nproc)"
+    ```
+
+4.  **Build the Runtime Image**:
+    ```bash
+    docker build --no-cache -t ollama-custom-xmx -f docker/Dockerfile.runtime .
+    ```
+
+## Project Structure
+
+*   `docker/`: Dockerfiles for the build and runtime stages.
+*   `scripts/`: Python proxy (`ollama_proxy.py`) and legacy helpers.
+*   `patches/`: XMX optimization patches (applied during build).
+

@@ -6,7 +6,7 @@ echo "Building optimized llama-server for B580/B570 GPUs..."
 
 # 1. Build the OneAPI Docker image
 echo "[1/4] Building Builder Image (This may take a while)..."
-docker build -t llama-oneapi docker/
+docker build -t llama-oneapi -f docker/Dockerfile.builder docker/
 
 # 2. Check for source code or clone it
 if [ ! -d "llama.cpp-source" ]; then

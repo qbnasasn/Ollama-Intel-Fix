@@ -1,0 +1,30 @@
+FROM llama-oneapi:latest
+
+# Install Python & Runtime Deps
+RUN apt-get update && \
+    apt-get install -y python3 python3-pip python3-flask python3-requests curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy compiled binary from host context
+COPY llama.cpp-source/build/bin/llama-server /app/llama-server
+RUN chmod +x /app/llama-server
+
+# Fix missing libmtmd.so.0 by symlinking libimf.so
+RUN ln -s /opt/intel/oneapi/compiler/latest/lib/libimf.so /usr/lib/libmtmd.so.0
+
+# Copy Proxy script
+COPY Ollama-Intel-Fix/scripts/ollama_proxy.py /app/ollama_proxy.py
+RUN chmod +x /app/ollama_proxy.py
+
+# Environment
+ENV OLLAMA_HOST=0.0.0.0:8080
+ENV BACKEND_HOST=127.0.0.1
+ENV BACKEND_PORT=8081
+
+# Expose the internal port the proxy listens on
+EXPOSE 8080
+
+ENTRYPOINT ["python3", "/app/ollama_proxy.py"]
