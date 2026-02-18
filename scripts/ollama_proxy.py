@@ -170,7 +170,7 @@ def start_backend(blob_path):
             "--port", str(BACKEND_PORT),
             "--n-gpu-layers", "99",
             "--ctx-size", "2048",
-            "--batch-size", "512"
+            "--batch-size", "256"
         ]
         
         # Auto-Split Logic:
