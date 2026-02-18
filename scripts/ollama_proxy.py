@@ -174,21 +174,14 @@ def start_backend(blob_path):
         ]
         
         # Auto-Split Logic:
-        # 1. Explicit Env Var: SPLIT_MODE=true
-        # 2. File Size > 11GB (Safety margin for 12GB VRAM)
-        enable_split = False
-        if os.environ.get("SPLIT_MODE", "false").lower() == "true":
-            enable_split = True
-            logger.info("Split Mode enabled via environment variable.")
+        # Default to Split Mode for ALL models if dual GPUs are present,
+        # unless explicitly disabled via environment variable.
+        enable_split = True
+        if os.environ.get("SPLIT_MODE", "true").lower() == "false":
+            enable_split = False
+            logger.info("Split Mode disabled via environment variable.")
         else:
-            try:
-                blob_size = os.path.getsize(blob_path)
-                size_gb = blob_size / (1024**3)
-                if size_gb > 11.0:
-                    enable_split = True
-                    logger.info(f"Model size {size_gb:.2f}GB > 11GB. Auto-enabling Split Mode.")
-            except Exception as e:
-                logger.warning(f"Could not check model size: {e}")
+            logger.info("Split Mode enabled by default for stability.")
 
         if enable_split:
              cmd.extend(["--split-mode", "layer"])
