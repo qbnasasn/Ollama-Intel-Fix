@@ -140,28 +140,30 @@ def start_backend(blob_path):
         
         logger.info(f"Starting backend with model: {blob_path}")
         
-        # 1. Capture OneAPI Environment
-        # We run a shell command to source setvars.sh and dump the environment
+        # 1. Capture OneAPI Environment (Crucial for Battlemage)
         env_cmd = "source /opt/intel/oneapi/setvars.sh --force > /dev/null 2>&1 && env"
         try:
-            # Run bash to get env vars
             output = subprocess.check_output(["bash", "-c", env_cmd], text=True)
             oneapi_env = {}
             for line in output.splitlines():
                 if "=" in line:
                     key, value = line.split("=", 1)
                     oneapi_env[key] = value
-            
-            # Merge with current env
             final_env = os.environ.copy()
             final_env.update(oneapi_env)
-            
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to load OneAPI environment: {e}")
-            return False
+        except Exception as e:
+            logger.warning(f"Failed to capture OneAPI env via setvars: {e}. Falling back to inherited env.")
+            final_env = os.environ.copy()
+        
+        # Add BigDL library path (User requested for custom LLM)
+        bigdl_lib_path = "/usr/local/lib/python3.11/dist-packages/bigdl/cpp/libs/llama_cpp"
+        if os.path.exists(bigdl_lib_path):
+             if "LD_LIBRARY_PATH" in final_env:
+                 final_env["LD_LIBRARY_PATH"] = f"{bigdl_lib_path}:{final_env['LD_LIBRARY_PATH']}"
+             else:
+                 final_env["LD_LIBRARY_PATH"] = bigdl_lib_path
 
         # 2. Start llama-server directly
-        # Note: Reduced context to 2048 to prevent OOM on 12GB VRAM
         cmd = [
             SERVER_BINARY,
             "-m", blob_path,
@@ -173,15 +175,9 @@ def start_backend(blob_path):
             "--batch-size", "256"
         ]
         
-        # Auto-Split Logic:
-        # Default to Split Mode for ALL models if dual GPUs are present,
-        # unless explicitly disabled via environment variable.
+        # Force Split Mode for Battlemage Cluster stability
         enable_split = True
-        if os.environ.get("SPLIT_MODE", "true").lower() == "false":
-            enable_split = False
-            logger.info("Split Mode disabled via environment variable.")
-        else:
-            logger.info("Split Mode enabled by default for stability.")
+        logger.info("Split Mode forced to True for 24GB VRAM stability.")
 
         if enable_split:
              cmd.extend(["--split-mode", "layer"])
@@ -263,18 +259,33 @@ def proxy_request(path):
     if not current_process:
         return jsonify({"error": "No model loaded and no default found"}), 503
 
-    resp = requests.request(
-        method=request.method,
-        url=f"{BACKEND_URL}{path}",
-        headers={k:v for k,v in request.headers if k.lower() != 'host'},
-        data=request.get_data(),
-        cookies=request.cookies,
-        allow_redirects=False,
-        stream=True
-    )
+    for i in range(30): # Up to 30 seconds of retries for "Loading" state
+        try:
+            resp = requests.request(
+                method=request.method,
+                url=f"{BACKEND_URL}{path}",
+                headers={k:v for k,v in request.headers if k.lower() != 'host'},
+                data=request.get_data(),
+                cookies=request.cookies,
+                allow_redirects=False,
+                stream=True
+            )
+            
+            # If backend is loading or busy (503), it might be finishing startup
+            if resp.status_code == 503 and i < 29:
+                logger.info("Backend returned 503 (Loading/Busy), retrying in 1s...")
+                time.sleep(1)
+                continue
+                
+            headers = [(k,v) for k,v in resp.headers.items()]
+            return Response(stream_with_context(resp.iter_content(chunk_size=4096)), status=resp.status_code, headers=headers)
+        except requests.exceptions.ConnectionError:
+            if i < 29:
+                time.sleep(1)
+                continue
+            return jsonify({"error": "Backend connection failed after retries"}), 504
     
-    headers = [(k,v) for k,v in resp.headers.items()]
-    return Response(stream_with_context(resp.iter_content(chunk_size=4096)), status=resp.status_code, headers=headers)
+    return jsonify({"error": "Backend stayed unavailable"}), 503
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def v1_chat():
